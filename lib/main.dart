@@ -1,14 +1,15 @@
-// ignore_for_file: public_member_api_docs, sort_constructors_first
-
 import 'dart:io';
 
-import 'package:async_wallpaper/async_wallpaper.dart';
 import 'package:awesome_snackbar_content/awesome_snackbar_content.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_neumorphic/flutter_neumorphic.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:wallpaper_app/constants.dart';
+import 'package:wallpaper_app/cubit/wallpaper_cubit.dart';
+import 'package:wallpaper_app/utils.dart';
+import 'package:wallpaper_app/wallpaper_model.dart';
+
+import 'loaction_enum.dart';
 
 void main() => runApp(const MyApp());
 
@@ -17,17 +18,20 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.light().copyWith(
-        primaryColor: Colors.black,
-        colorScheme: const ColorScheme.light().copyWith(
-          primary: Colors.black,
-          secondary: Colors.black,
+    return BlocProvider(
+      create: (context) => WallpaperCubit()..getWallpapers('abstract+art'),
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData.light().copyWith(
+          primaryColor: Colors.black,
+          colorScheme: const ColorScheme.light().copyWith(
+            primary: Colors.black,
+            secondary: Colors.black,
+          ),
         ),
+        title: 'Wallaper App',
+        home: const WallpaperScreen(),
       ),
-      title: 'Wallaper App',
-      home: const WallpaperScreen(),
     );
   }
 }
@@ -42,29 +46,7 @@ class WallpaperScreen extends StatefulWidget {
 }
 
 class _WallpaperScreenState extends State<WallpaperScreen> {
-  final List<File> imageFiles = [];
-  bool loading = true;
-  @override
-  void initState() {
-    super.initState();
-    loadImages().then((value) {
-      setState(() {
-        loading = false;
-      });
-    });
-  }
-
-  Future<void> loadImages() async {
-    for (var i = 0; i < images.length; i++) {
-      final byteData = await rootBundle.load(images[i]);
-
-      final file = File('${(await getApplicationDocumentsDirectory()).path}/$i.jpeg');
-      await file.writeAsBytes(
-          byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes));
-      imageFiles.add(file);
-    }
-  }
-
+  final TextEditingController _controller = TextEditingController();
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -76,31 +58,64 @@ class _WallpaperScreenState extends State<WallpaperScreen> {
       backgroundColor: const Color.fromARGB(255, 236, 236, 236),
       body: Column(
         children: [
+          const Text('Wallpaper App', style: TextStyle(fontSize: 40, fontFamily: handlee)),
           Neumorphic(
             margin: const EdgeInsets.all(10),
-            child: const TextField(
+            child: TextField(
               textAlignVertical: TextAlignVertical.center,
               decoration: InputDecoration(
-                contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 border: InputBorder.none,
                 hintText: 'Search Wallpaper',
-                suffixIcon: Icon(Icons.search),
+                hintStyle: const TextStyle(color: Colors.grey),
+                suffixIcon: ElevatedButton(
+                  child: const Icon(Icons.search),
+                  onPressed: () {
+                    FocusScope.of(context).unfocus();
+                    context.read<WallpaperCubit>().getWallpapers(_controller.text);
+                  },
+                ),
               ),
+              onSubmitted: (value) {
+                context.read<WallpaperCubit>().getWallpapers(value);
+              },
             ),
           ),
           Expanded(
-            child: loading
-                ? const Center(child: CircularProgressIndicator())
-                : MasonryGridView.count(
-                    padding: const EdgeInsets.only(top: 10),
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 0,
-                    crossAxisSpacing: 0,
-                    itemBuilder: (context, index) {
-                      return ImageCard(image: imageFiles[index]);
-                    },
-                    itemCount: images.length,
-                  ),
+            child: BlocConsumer<WallpaperCubit, WallpaperState>(
+              listener: (context, state) {
+                if (state is WallpaperAppliedFailed) {
+                  Utils.showSnackBar(context, ContentType.failure);
+                } else if (state is WallpaperAppliedFailed) {
+                  Utils.showSnackBar(context, ContentType.success);
+                }
+              },
+              builder: (context, state) {
+                if (state is WallpaperLoading) {
+                  return const Center(child: CircularProgressIndicator());
+                } else if (state is WallpaperError) {
+                  return const Center(child: Text('Error loading images'));
+                }
+                List<WallpaperModel> wallpapers = [];
+                if (state is WallpaperLoaded) {
+                  wallpapers = state.wallpapers;
+                } else {
+                  wallpapers = context.read<WallpaperCubit>().wallpapers;
+                }
+
+                return MasonryGridView.count(
+                  padding: const EdgeInsets.only(top: 10),
+                  physics: const BouncingScrollPhysics(),
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 0,
+                  crossAxisSpacing: 0,
+                  itemBuilder: (context, index) {
+                    return ImageCard(wallpaper: wallpapers[index]);
+                  },
+                  itemCount: wallpapers.length,
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -109,10 +124,10 @@ class _WallpaperScreenState extends State<WallpaperScreen> {
 }
 
 class ImageCard extends StatelessWidget {
-  final File image;
+  final WallpaperModel wallpaper;
   const ImageCard({
     Key? key,
-    required this.image,
+    required this.wallpaper,
   }) : super(key: key);
 
   @override
@@ -132,16 +147,13 @@ class ImageCard extends StatelessWidget {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => SetWallpaperScreen(image: image),
+                builder: (context) => SetWallpaperScreen(wallpaper: wallpaper),
               ),
             );
           },
-          child: Hero(
-            tag: image.path,
-            child: Image.file(
-              image,
-              fit: BoxFit.cover,
-            ),
+          child: Image.network(
+            wallpaper.thumbnail,
+            fit: BoxFit.cover,
           ),
         ),
       ),
@@ -149,95 +161,128 @@ class ImageCard extends StatelessWidget {
   }
 }
 
-class SetWallpaperScreen extends StatelessWidget {
-  final File image;
+class SetWallpaperScreen extends StatefulWidget {
+  final WallpaperModel wallpaper;
   const SetWallpaperScreen({
     Key? key,
-    required this.image,
+    required this.wallpaper,
   }) : super(key: key);
 
-  void showSnackBar(BuildContext context, ContentType type) {
-    final snackBar = SnackBar(
-      elevation: 0,
-      behavior: SnackBarBehavior.floating,
-      backgroundColor: Colors.transparent,
-      content: AwesomeSnackbarContent(
-        title: type == ContentType.success ? 'Success' : 'Error',
-        message:
-            type == ContentType.success ? 'Wallpaper set successfully' : 'Error setting wallpaper',
-        contentType: type,
-      ),
-    );
+  @override
+  State<SetWallpaperScreen> createState() => _SetWallpaperScreenState();
+}
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(snackBar);
+class _SetWallpaperScreenState extends State<SetWallpaperScreen>
+    with AutomaticKeepAliveClientMixin {
+  File? wallpaperFile;
+
+  @override
+  void initState() {
+    super.initState();
+    context.read<WallpaperCubit>().downloadWallpaper(widget.wallpaper.original).then((value) {
+      setState(() {
+        wallpaperFile = value;
+      });
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Stack(
+          fit: StackFit.expand,
           children: [
-            Expanded(
-              child: Hero(
-                tag: image.path,
-                child: Image.file(
-                  image,
-                  fit: BoxFit.contain,
+            wallpaperFile == null
+                ? const LoadingIndicator()
+                : Image.file(
+                    wallpaperFile!,
+                    fit: BoxFit.cover,
+                  ),
+            if (wallpaperFile != null)
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton(
+                        onPressed: () async {
+                          await context
+                              .read<WallpaperCubit>()
+                              .setWallpaper(wallpaperFile!.path, WallpaperLocation.home);
+                        },
+                        child: const Text('Home Screen'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () async {
+                          await context
+                              .read<WallpaperCubit>()
+                              .setWallpaper(wallpaperFile!.path, WallpaperLocation.both);
+                        },
+                        child: const Text('Both'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () async {
+                          await context
+                              .read<WallpaperCubit>()
+                              .setWallpaper(wallpaperFile!.path, WallpaperLocation.lock);
+                        },
+                        child: const Text('Lock Screen'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
+            Positioned(
+              top: 50,
+              left: 0,
+              child: BlocListener<WallpaperCubit, WallpaperState>(
+                listener: (context, state) {
+                  if (state is WallpaperAppliedSuccess) {
+                    Utils.showSnackBar(context, ContentType.success);
+                  } else if (state is WallpaperAppliedFailed) {
+                    Utils.showSnackBar(context, ContentType.failure);
+                  }
+                },
+                child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      shape: const CircleBorder(),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                    },
+                    child: const Icon(
+                      Icons.arrow_back,
+                      color: Colors.black,
+                    )),
+              ),
             ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                ElevatedButton(
-                  onPressed: () async => setWallpaper(context, Location.home),
-                  child: const Text('Wallpaper Screen'),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    Future.wait([
-                      setWallpaper(context, Location.home),
-                      setWallpaper(context, Location.lock),
-                    ]);
-                  },
-                  child: const Text('Both'),
-                ),
-                ElevatedButton(
-                  onPressed: () async => setWallpaper(context, Location.lock),
-                  child: const Text('Lock Screen'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
           ],
         ),
       ),
     );
   }
 
-  Future<void> setWallpaper(BuildContext context, Location location) async {
-    try {
-      await AsyncWallpaper.setWallpaperFromFile(
-        filePath: image.path,
-        wallpaperLocation: location.value,
-        goToHome: false,
-      );
-      // ignore: use_build_context_synchronously
-      showSnackBar(context, ContentType.success);
-    } catch (_) {
-      showSnackBar(context, ContentType.failure);
-    }
-  }
+  @override
+  bool get wantKeepAlive => true;
 }
 
-enum Location {
-  home(1),
-  lock(2);
+class LoadingIndicator extends StatelessWidget {
+  const LoadingIndicator({super.key});
 
-  final int value;
-  const Location(this.value);
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: CircularProgressIndicator(),
+    );
+  }
 }
