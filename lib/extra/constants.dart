@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 // key
-const key = 'YOUR API KEy HERE';
+const key = 'YOUR API KEY HERE';
 
 // assets
 const String handlee = 'Handlee-Regular';
